@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+
+import subprocess
+import sys
+from impacket.smbconnection import SMBConnection
+from concurrent.futures import ThreadPoolExecutor
+import re
+
+target = sys.argv[1]
+username = "guest"
+password = ""
+domain = ""
+
+conn = SMBConnection(target, target, sess_port=445)
+conn.login(username, password, domain)
+
+queue = [""]
+folders = []
+identified_shares = []
+
+def identify_shares():
+    print("[+] Identifying shares....", end=" ", flush=True)
+
+    try:
+        cmd = f'smbclient -L {target} -N'
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        output = result.stdout
+
+        for line in output.splitlines():
+            match = re.match(r"^\s*(\S(?:.*\S)?)\s+Disk", line)
+            if match:
+                share_name = match.group(1)
+
+                if share_name not in ["IPC$", "$", "ADMIN$", "C$"]:
+                    if check_share_accessibility(share_name):
+                        identified_shares.append(share_name)
+
+    except Exception as e:
+        print(f"[-] Error identifying shares: {e}")
+
+    print("Done.")
+
+    print("[+] Identified shares:")
+    for share in identified_shares:
+        print(f"\033[32m✔️ {share}\033[0m")
+    
+    for share in identified_shares:
+        identify_folders(share)
+
+def check_share_accessibility(share_name):
+    cmd = f'smbclient -N "//{target}/{share_name}" --command="dir"'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+
+    if result.returncode == 0:
+        return True
+    else:
+        return False
+
+def identify_folders(share):
+    print(f"[+] Identifying folders in {share}....", end=" ", flush=True)
+
+    folders.append(share)
+
+    with ThreadPoolExecutor(max_workers=50) as executor:
+        executor.map(discover_folders, [(share, "")])
+
+    print("Done.")
+
+def discover_folders(share_folder_tuple):
+    share, path = share_folder_tuple
+    try:
+        entries = conn.listPath(share, path + "\\*" if path else "*")
+        for entry in entries:
+            name = entry.get_longname()
+            if name in [".", ".."] or not entry.is_directory():
+                continue
+            full = f"{path}\\{name}" if path else name
+            if full != share:
+                folders.append(full)
+            queue.append((share, full))
+    except Exception as e:
+        pass
+
+def check_permissions():
+    print("[+] Checking ACL permissions....", end=" ", flush=True)
+
+    writable_folders = []
+    max_workers = 50
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = executor.map(check_permissions_single, [(share, folder) for share in identified_shares for folder in folders])
+        for writable_folder in results:
+            if writable_folder:
+                writable_folders.append(writable_folder)
+
+    print("Done.")
+
+    print("[+] Identified writable folders:")
+    for writable_folder in writable_folders:
+        if writable_folder.startswith(f"{writable_folder.split('\\')[0]}\\{writable_folder.split('\\')[0]}"):
+            writable_folder = writable_folder.replace(f"{writable_folder.split('\\')[0]}\\", "", 1)
+        print(f"\033[32m✔️ WRITEABLE!    {writable_folder}\033[0m")
+
+def check_permissions_single(share_folder_tuple):
+    share, folder = share_folder_tuple
+    folder_path = folder.replace("\\", "/")
+    cmd = f'smbclient -N "//{target}/{share}" --command=\'cd "{folder_path}"; showacls; dir\''
+
+    try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        output = result.stdout
+    except subprocess.TimeoutExpired:
+        return None
+
+    block = []
+    in_dir = False
+    found = False
+    for line in output.splitlines():
+        if line.startswith("FILENAME:"):
+            if block and found:
+                filename = block[0].split(":")[1].strip()
+                if folder == "":
+                    return f"{share}\\{filename}"
+                else:
+                    return f"{share}\\{folder}\\{filename}"
+            block = [line]
+            in_dir = False
+        elif line.startswith("MODE:D"):
+            in_dir = True
+            block.append(line)
+        elif in_dir and "SID: S-1-1-0" in line and "Permissions: 0x1f01ff" in block[-1]:
+            found = True
+            block.append(line)
+        elif block:
+            block.append(line)
+    if block and found:
+        filename = block[0].split(":")[1].strip()
+        if folder == "":
+            return f"{share}\\{filename}"
+        else:
+            return f"{share}\\{folder}\\{filename}"
+    return None
+
+identify_shares()
+check_permissions()
