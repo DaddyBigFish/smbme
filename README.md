@@ -1,10 +1,14 @@
 # smbme
 ### Find writeable folders deep within SMB.
-<img src="https://github.com/user-attachments/assets/cf6cc6f9-1cdd-4cec-805d-303fe0347c58" alt="cidr2list" width="200"/>    
+<img src="https://github.com/user-attachments/assets/ac2ff41c-1fa2-4e83-9a79-812d9ed2b14a" alt="smbme" width="200"/>    
 
 # Description
-This was developed to solve the simple issue of converting CIDR ranges to lists of IPs quickly.
+This was developed to solve the issue of understanding ACLs during SMB enumeration. Sometimes folders nested within a share are writable but all the tools I've used always seem to fail to report it since they are only identifying if the share itself is writebale or readable. This is confusing, because the share may still be inherently writable if a folder's ACL within the share has been set to allow write permissions. The tool 𝘀𝗺𝗯𝗺𝗲 provides the solution for this. It gives the user a way to identify writeable subfolders deep within an SMB share. It essentially connects, verifies accessible shares, it enumerates deep into the folder structure, then finally uses smbclient's showacl to read all of the folder's permissions to identify **SID: S-1-1-0 (Everyone)** and **Permissions: 0x1f01ff (Write)**.
 
+# Requirements
+```
+pip3 install impacket
+```
 # Install
 ```
 sudo wget https://github.com/DaddyBigFish/smbme/raw/refs/heads/main/smbme -O /usr/local/bin/smbme
@@ -12,19 +16,13 @@ sudo chmod +x /usr/local/bin/smbme
 ```
 # Usage
 ```
-cidr2list 10.77.107.16/28
-10.77.107.17
-10.77.107.18
-10.77.107.19
-10.77.107.20
-10.77.107.21
-10.77.107.22
-10.77.107.23
-10.77.107.24
-10.77.107.25
-10.77.107.26
-10.77.107.27
-10.77.107.28
-10.77.107.29
-10.77.107.30
+smbme xxx.xxx.x.xxx
+[+] Identifying shares.... Done.
+[+] Identified shares:
+✔️ Department Shares
+[+] Identifying folders in Department Shares.... Done.
+[+] Checking ACL permissions.... Done.
+[+] Identified writable folders:
+✔️ WRITEABLE!    Department Shares\ZZ_ARCHIVE
+✔️ WRITEABLE!    Department Shares\Users\Public
 ```
